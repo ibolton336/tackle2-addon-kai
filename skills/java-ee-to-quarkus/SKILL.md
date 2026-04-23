@@ -31,8 +31,17 @@ Migrating from JBoss EAP 7.x / Java EE 8 to Quarkus 3.x. Key changes:
 - ORM: Hibernate ORM with Panache where applicable
 - Preserve all test files unless they directly import EE APIs
 
+## Known compatibility requirements
+- Use **Quarkus 3.8.6+** — earlier versions have Byte Buddy issues with Java 21+
+- Set `maven.compiler.source/target/release` to **17** (even if running Java 21+)
+- `io.smallrye.reactive:smallrye-reactive-messaging-in-memory` must be added explicitly (not in Quarkus BOM)
+- Local/system-scoped JAR dependencies (e.g. `<scope>system</scope>`) need manual resolution — flag these to the user
+- Add `net.bytebuddy.experimental=true` JVM arg if Hibernate enhancement fails on newer JVMs
+
 ## How to proceed
-1. Run `find . -name "*.java" | head -20` to understand project structure
-2. Start with the most-referenced service classes
-3. Fix one file at a time, verify it compiles before moving on
-4. Commit progress every 5-10 files with message "chore: migrate <package> to quarkus"
+1. Run `find . -name "*.java" | sort` and `cat pom.xml` to understand project structure
+2. Update `pom.xml` first — replace Java EE deps with Quarkus BOM, set compiler to Java 17
+3. Migrate in this order: models → services → REST endpoints → utils → remove deleted files
+4. Run `mvn compile -q` after each group — fix errors before moving on
+5. Commit progress per group with message "chore: migrate <layer> to quarkus"
+6. Final: run `mvn package -DskipTests -q` to verify full build succeeds
