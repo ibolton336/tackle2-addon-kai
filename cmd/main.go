@@ -18,9 +18,14 @@ var (
 )
 
 type Data struct {
-	Repository      repository.SCM
-	Source          string
-	MigrationTarget string `json:"migrationTarget"`
+	Repository        repository.SCM
+	Source            string
+	MigrationTarget   string   `json:"migrationTarget"`   // skill name, default "java-ee-to-quarkus"
+	MessagingProvider string   `json:"messagingProvider"` // "in-memory", "rabbitmq", "kafka" — default "in-memory"
+	JavaTarget        string   `json:"javaTarget"`        // "17", "21" — default "17"
+	SkipPackages      []string `json:"skipPackages"`      // packages to leave untouched
+	BranchName        string   `json:"branchName"`        // output branch — default "kai/migrate-to-quarkus"
+	DryRun            bool     `json:"dryRun"`            // plan only, do not write files
 }
 
 func init() {
@@ -37,6 +42,18 @@ func main() {
 		}
 		if d.Source == "" {
 			d.Source = Source
+		}
+		if d.MigrationTarget == "" {
+			d.MigrationTarget = "java-ee-to-quarkus"
+		}
+		if d.JavaTarget == "" {
+			d.JavaTarget = "17"
+		}
+		if d.MessagingProvider == "" {
+			d.MessagingProvider = "in-memory"
+		}
+		if d.BranchName == "" {
+			d.BranchName = "kai/migrate-to-quarkus"
 		}
 
 		//
@@ -67,28 +84,26 @@ func main() {
 
 		// Load migration skill
 		addon.Activity("Loading migration skill.")
-		migrationTarget := d.MigrationTarget
-		if migrationTarget == "" {
-			migrationTarget = "java-ee-to-quarkus"
-		}
-		skillPath := path.Join(Dir, "skills", migrationTarget, "SKILL.md")
+		skillPath := path.Join(Dir, "skills", d.MigrationTarget, "SKILL.md")
 
 		// Run migration with goose
 		addon.Activity("Running migration with goose.")
-		err = RunMigration(SourceDir, skillPath)
+		err = RunMigration(SourceDir, skillPath, d)
 		if err != nil {
 			return
 		}
 
-		// Push migration branch
-		addon.Activity("Pushing migration branch.")
-		branchName := fmt.Sprintf("kai/migrate-to-quarkus-%d", addon.Task.ID)
-		err = PushMigrationBranch(SourceDir, branchName)
-		if err != nil {
-			return
+		// Push migration branch (skip if dry run)
+		if d.DryRun {
+			addon.Activity("Dry run complete.")
+		} else {
+			addon.Activity("Pushing migration branch.")
+			err = PushMigrationBranch(SourceDir, d.BranchName)
+			if err != nil {
+				return
+			}
+			addon.Activity("Migration complete.")
 		}
-
-		addon.Activity("Migration complete.")
 		return
 	})
 }

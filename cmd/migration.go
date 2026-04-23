@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 // RunMigration runs goose with the migration skill against the source directory.
 // It reads LLM config from environment (AWS Bedrock via GOOSE_PROVIDER etc.)
 // and runs goose non-interactively with the skill as context.
-func RunMigration(sourceDir string, skillPath string) (err error) {
+func RunMigration(sourceDir string, skillPath string, d *Data) (err error) {
 	if _, err = exec.LookPath("goose"); err != nil {
 		return fmt.Errorf("goose binary not found in PATH: %w", err)
 	}
@@ -19,15 +20,35 @@ func RunMigration(sourceDir string, skillPath string) (err error) {
 		return fmt.Errorf("failed to read skill: %w", err)
 	}
 
+	// Build task configuration section
+	var skipMsg string
+	if len(d.SkipPackages) > 0 {
+		skipMsg = strings.Join(d.SkipPackages, ", ")
+	} else {
+		skipMsg = "none"
+	}
+
+	dryRunMsg := ""
+	if d.DryRun {
+		dryRunMsg = "\n- THIS IS A DRY RUN: describe all planned changes in detail but do NOT write or modify any files"
+	}
+
+	taskConfig := fmt.Sprintf(`
+## Task configuration (these override skill defaults)
+- Messaging provider: %s
+- Java target version: %s
+- Packages to skip (do not modify): %s%s
+`, d.MessagingProvider, d.JavaTarget, skipMsg, dryRunMsg)
+
 	prompt := fmt.Sprintf(`You are performing a Java EE to Quarkus migration.
 
 Read and follow the migration guide below carefully.
 
 %s
-
+%s
 Now migrate the Java EE application in the current directory to Quarkus 3.x.
 Work through the codebase systematically. Commit your changes as you go.
-When complete, summarize what was changed.`, string(skillContent))
+When complete, summarize what was changed.`, string(skillContent), taskConfig)
 
 	cmd := exec.Command("goose", "run", "--text", prompt)
 	cmd.Dir = sourceDir
