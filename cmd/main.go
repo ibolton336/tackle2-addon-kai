@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path"
 
@@ -17,8 +18,9 @@ var (
 )
 
 type Data struct {
-	Repository repository.SCM
-	Source     string
+	Repository      repository.SCM
+	Source          string
+	MigrationTarget string `json:"migrationTarget"`
 }
 
 func init() {
@@ -63,11 +65,30 @@ func main() {
 			return
 		}
 
-		// Perform migration using skills and migration plan
+		// Load migration skill
+		addon.Activity("Loading migration skill.")
+		migrationTarget := d.MigrationTarget
+		if migrationTarget == "" {
+			migrationTarget = "java-ee-to-quarkus"
+		}
+		skillPath := path.Join(Dir, "skills", migrationTarget, "SKILL.md")
 
-		// Push to a branch
+		// Run migration with goose
+		addon.Activity("Running migration with goose.")
+		err = RunMigration(SourceDir, skillPath)
+		if err != nil {
+			return
+		}
 
-		// TODO: Should we use asset repo for this? or just pick a branch name and push to original source?
+		// Push migration branch
+		addon.Activity("Pushing migration branch.")
+		branchName := fmt.Sprintf("kai/migrate-to-quarkus-%d", addon.Task.ID)
+		err = PushMigrationBranch(SourceDir, branchName)
+		if err != nil {
+			return
+		}
+
+		addon.Activity("Migration complete.")
 		return
 	})
 }

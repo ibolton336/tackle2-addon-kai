@@ -14,7 +14,9 @@ RUN microdnf -y install \
  openssh-clients \
  subversion \
  git \
- tar
+ tar \
+ && curl -fsSL https://github.com/block/goose/releases/latest/download/goose-linux-x86_64 -o /usr/bin/goose \
+ && chmod +x /usr/bin/goose
 RUN sed -i 's/^LANG=.*/LANG="en_US.utf8"/' /etc/locale.conf
 ENV LANG=en_US.utf8
 RUN echo "addon:x:1001:1001:addon user:/addon:/sbin/nologin" >> /etc/passwd
@@ -24,4 +26,5 @@ ENV HOME=/addon ADDON=/addon
 WORKDIR /addon
 ARG GOPATH=/opt/app-root
 COPY --from=addon $GOPATH/src/bin/addon /usr/bin
+COPY skills/ /addon/skills/
 ENTRYPOINT ["/usr/bin/addon"]
