@@ -4,20 +4,41 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"strings"
 )
 
 // RunMigration runs goose with the migration skill against the source directory.
 // It reads LLM config from environment (AWS Bedrock via GOOSE_PROVIDER etc.)
 // and runs goose non-interactively with the skill as context.
+//
+// Architecture: two-layer skill system
+//   - Orchestrator (/addon/skills/SKILL.md): imperative workflow instructions
+//   - Transformation ref (/addon/skills/<target>/SKILL.md): specific mappings
+//   - Pallet-synced skills (.goose/skills/): runtime-fetched overrides
 func RunMigration(sourceDir string, skillPath string, d *Data) (err error) {
 	if _, err = exec.LookPath("goose"); err != nil {
 		return fmt.Errorf("goose binary not found in PATH: %w", err)
 	}
 
-	skillContent, err := os.ReadFile(skillPath)
-	if err != nil {
-		return fmt.Errorf("failed to read skill: %w", err)
+	// Load orchestrator skill (generic imperative workflow)
+	orchestratorPath := path.Join(path.Dir(skillPath), "..", "SKILL.md")
+	orchestratorContent, orchErr := os.ReadFile(orchestratorPath)
+	if orchErr != nil {
+		// Fall back: use skill path directly if no orchestrator exists
+		orchestratorContent = nil
+	}
+
+	// Load transformation reference (migration-type-specific)
+	// Priority: pallet-synced > baked-in
+	palletSkillPath := path.Join(sourceDir, ".goose", "skills", d.MigrationTarget, "SKILL.md")
+	skillContent, readErr := os.ReadFile(palletSkillPath)
+	if readErr != nil {
+		// Fall back to baked-in skill
+		skillContent, err = os.ReadFile(skillPath)
+		if err != nil {
+			return fmt.Errorf("failed to read skill: %w", err)
+		}
 	}
 
 	// Build task configuration section
@@ -34,21 +55,39 @@ func RunMigration(sourceDir string, skillPath string, d *Data) (err error) {
 	}
 
 	taskConfig := fmt.Sprintf(`
-## Task configuration (these override skill defaults)
+## Task Configuration (these override skill defaults)
+- Migration target: %s
 - Messaging provider: %s
 - Java target version: %s
 - Packages to skip (do not modify): %s%s
-`, d.MessagingProvider, d.JavaTarget, skipMsg, dryRunMsg)
+`, d.MigrationTarget, d.MessagingProvider, d.JavaTarget, skipMsg, dryRunMsg)
 
-	prompt := fmt.Sprintf(`You are performing a Java EE to Quarkus migration.
+	// Assemble the full prompt: orchestrator + transformation ref + task config
+	var prompt string
+	if orchestratorContent != nil {
+		prompt = fmt.Sprintf(`%s
+
+---
+
+# Transformation Reference (%s)
+
+%s
+%s
+Migrate the application in the current directory NOW. Start with Phase 1.`,
+			string(orchestratorContent), d.MigrationTarget, string(skillContent), taskConfig)
+	} else {
+		// Legacy fallback: skill-only prompt
+		prompt = fmt.Sprintf(`You are performing a code migration.
 
 Read and follow the migration guide below carefully.
 
 %s
 %s
-Now migrate the Java EE application in the current directory to Quarkus 3.x.
-Work through the codebase systematically. Commit your changes as you go.
+Now migrate the application in the current directory.
+Work through the codebase systematically. Transform source files in place.
+Do NOT write documentation or guide files. Only modify source code.
 When complete, summarize what was changed.`, string(skillContent), taskConfig)
+	}
 
 	cmd := exec.Command("goose", "run", "--text", prompt)
 	cmd.Dir = sourceDir
@@ -91,6 +130,38 @@ func PushMigrationBranch(sourceDir string, branchName string) (err error) {
 		if err = cmd.Run(); err != nil {
 			return fmt.Errorf("git command %v failed: %w", args, err)
 		}
+	}
+	return nil
+}
+
+// RunPalletSync runs pallet sync in the source directory to pull skills
+// from configured sources into .goose/skills/.
+func RunPalletSync(sourceDir string) error {
+	palletPath, err := exec.LookPath("pallet")
+	if err != nil {
+		return fmt.Errorf("pallet binary not found: %w", err)
+	}
+
+	// Check if pallet.yaml exists in the source dir
+	palletYaml := path.Join(sourceDir, "pallet.yaml")
+	if _, err := os.Stat(palletYaml); os.IsNotExist(err) {
+		// Check env var for pallet config content
+		palletContent := os.Getenv("PALLET_YAML")
+		if palletContent == "" {
+			return fmt.Errorf("no pallet.yaml found and PALLET_YAML not set")
+		}
+		// Write it
+		if err := os.WriteFile(palletYaml, []byte(palletContent), 0644); err != nil {
+			return fmt.Errorf("failed to write pallet.yaml: %w", err)
+		}
+	}
+
+	cmd := exec.Command(palletPath, "sync", ".")
+	cmd.Dir = sourceDir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("pallet sync failed: %w", err)
 	}
 	return nil
 }

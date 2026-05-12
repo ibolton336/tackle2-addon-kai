@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 
 	"github.com/konveyor/tackle2-addon/repository"
@@ -64,11 +65,13 @@ func main() {
 			return
 		}
 
-		// Pallet sync skills and log hashes
-		// use archetype to get appropriate skills?
-		// arch, err := addon.Task.Archetype()
-
-		// Fetch assessment to get questions for usage in mig plan?
+		// Pallet sync: pull skills from configured sources into .goose/skills/
+		addon.Activity("Syncing skills via pallet.")
+		err = RunPalletSync(SourceDir)
+		if err != nil {
+			// Non-fatal: fall back to baked-in skills
+			addon.Activity(fmt.Sprintf("Pallet sync skipped: %v", err))
+		}
 
 		// SSH agent
 		agent := ssh.Agent{}
