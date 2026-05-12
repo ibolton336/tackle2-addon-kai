@@ -99,8 +99,10 @@ ARG GOPATH=/opt/app-root
 COPY --from=addon $GOPATH/src/bin/addon /usr/bin/addon
 COPY --from=addon $GOPATH/src/bin/fetch-analysis /usr/bin/fetch-analysis
 
-# Copy bundled skills
+# Copy bundled skills and standalone entrypoint
 COPY skills/ /addon/skills/
+COPY hack/standalone-entrypoint.sh /addon/hack/standalone-entrypoint.sh
+RUN chmod +x /addon/hack/standalone-entrypoint.sh
 
 ENV HOME=/addon ADDON=/addon
 WORKDIR /addon

@@ -1,0 +1,152 @@
+# Tekton pipeline and task for RHDH standalone migration.
+# Uses the same addon image in standalone mode (bypasses Hub framework).
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: migration-agent
+spec:
+  params:
+    - name: source-repo
+      description: Git repo URL to migrate
+      type: string
+    - name: source-branch
+      default: main
+      type: string
+    - name: target-branch
+      default: migration-output
+      type: string
+    - name: skill
+      default: migration
+      description: Skill name (maps to /addon/skills/<name>/SKILL.md or pallet-synced)
+      type: string
+    - name: plan-markdown
+      default: ""
+      description: Full plan markdown (overrides skill if provided)
+      type: string
+    - name: pallet-yaml
+      default: ""
+      description: Pallet.yaml content for runtime skill sync
+      type: string
+    - name: agent
+      default: goose
+      description: Agent to use (goose or opencode)
+      type: string
+  workspaces:
+    - name: source
+  steps:
+    - name: clone
+      image: alpine/git:latest
+      script: |
+        #!/bin/sh
+        set -ex
+        cd $(workspaces.source.path)
+        git clone --branch $(params.source-branch) $(params.source-repo) repo
+        cd repo
+        git checkout -b $(params.target-branch)
+
+    - name: migrate
+      image: quay.io/ibolton/migration-agent:latest
+      command: ["/bin/bash", "/addon/hack/standalone-entrypoint.sh"]
+      workingDir: $(workspaces.source.path)/repo
+      env:
+        - name: SKILL
+          value: $(params.skill)
+        - name: SOURCE_REPO
+          value: $(params.source-repo)
+        - name: TARGET_BRANCH
+          value: $(params.target-branch)
+        - name: PLAN_MARKDOWN
+          value: $(params.plan-markdown)
+        - name: PALLET_YAML
+          value: $(params.pallet-yaml)
+        - name: KAI_AGENT
+          value: $(params.agent)
+      envFrom:
+        - secretRef:
+            name: migration-agent-llm
+
+    - name: push-results
+      image: alpine/git:latest
+      workingDir: $(workspaces.source.path)/repo
+      envFrom:
+        - secretRef:
+            name: migration-agent-llm
+      script: |
+        #!/bin/sh
+        set -ex
+        git config user.email "migration-agent@konveyor.io"
+        git config user.name "Migration Agent"
+
+        if [ -n "$(git status --porcelain)" ]; then
+          git add -A
+          git commit -m "feat: automated migration via konveyor ($(params.skill))"
+
+          if [ -n "$GIT_TOKEN" ]; then
+            REPO_URL=$(echo "$(params.source-repo)" | sed 's|https://github.com/|https://x-access-token:'$GIT_TOKEN'@github.com/|')
+            git remote set-url origin "$REPO_URL"
+            git push origin $(params.target-branch)
+            echo ""
+            echo "=== Branch pushed successfully ==="
+            echo "Branch: $(params.target-branch)"
+            echo "PR URL: $(params.source-repo)/compare/$(params.target-branch)?expand=1"
+          else
+            echo "No GIT_TOKEN — commit created locally but not pushed."
+          fi
+        else
+          echo "No changes detected after migration."
+        fi
+
+---
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: migration-pipeline
+  labels:
+    konveyor.io/pipeline-type: migration
+spec:
+  params:
+    - name: source-repo
+      type: string
+    - name: source-branch
+      default: main
+      type: string
+    - name: target-branch
+      default: migration-output
+      type: string
+    - name: skill
+      default: migration
+      type: string
+    - name: plan-markdown
+      default: ""
+      type: string
+    - name: pallet-yaml
+      default: ""
+      type: string
+    - name: agent
+      default: goose
+      type: string
+  workspaces:
+    - name: shared-workspace
+  tasks:
+    - name: migrate
+      taskRef:
+        name: migration-agent
+      params:
+        - name: source-repo
+          value: $(params.source-repo)
+        - name: source-branch
+          value: $(params.source-branch)
+        - name: target-branch
+          value: $(params.target-branch)
+        - name: skill
+          value: $(params.skill)
+        - name: plan-markdown
+          value: $(params.plan-markdown)
+        - name: pallet-yaml
+          value: $(params.pallet-yaml)
+        - name: agent
+          value: $(params.agent)
+      workspaces:
+        - name: source
+          workspace: shared-workspace
